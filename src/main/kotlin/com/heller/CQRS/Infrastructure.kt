@@ -9,11 +9,21 @@ interface Command {
 
     }
 
+
+
     interface WithResult<R : Result> : Command
+
+    interface Creational<E : Event> : WithResult<Creational.Result>{
+        class Result : Command.Result // TODO - should contain newly created ID
+    }
 
     interface WithAggregateId<R : Result> : WithResult<R> {
         val aggregateId: String
     }
+
+    @Target(AnnotationTarget.FIELD)
+    @Retention(AnnotationRetention.RUNTIME)
+    annotation class AggregateId
 }
 
 data class PersistentEvent<A, E>(
@@ -34,22 +44,59 @@ interface CommandBus {
 
     fun fireAndForget(cmd: Command)
     fun <C, R> ask(cmd: C): R
+            where C : Command.WithResult<R>, R : Command.Result
+
+    fun <C, R> subscribe(cmdType: KClass<C>, handler: (C) -> R)
             where C : Command.WithAggregateId<R>, R : Command.Result
 
-    fun <C, R> subscribe(cmdType: KClass<in C>, handler: (C) -> R)
-            where C : Command.WithAggregateId<R>, R : Command.Result
-
+    fun <C, E> subscribeCreational(cmdType: KClass<C>, handler: (C) -> Command.Creational.Result)
+            where C : Command.Creational<E>, E : Event
 }
 
 interface EventBus {
 
     fun <E : Event> dispatch(event: E)
-    fun <E : Event> subscribe(evtType: KClass<in E>, handler: (E) -> Unit)
+    fun <E : Event> subscribe(evtType: KClass<E>, handler: (E) -> Unit)
 
 }
 
 
 interface ApplicationService
+
+interface AggregateSupportService {
+
+    companion object {
+
+        fun <A> register(commandBus: CommandBus, aggregateType: KClass<A>)
+                where A : Aggregate {
+
+            aggregateType.java.declaredConstructors
+                    .filter {
+
+                        it.getAnnotation(Aggregate.CreateCommandHandler::class.java) != null
+
+                    }
+                    .forEach {
+
+                        val constructor = it
+
+                        val commandType = constructor.parameterTypes.get(0).kotlin as KClass<Command.Creational<Event>>
+
+                        commandBus.subscribeCreational(commandType, {
+                            cmd ->
+
+                            constructor.newInstance(cmd)
+
+                            Command.Creational.Result()
+
+                        })
+                    }
+
+        }
+
+    }
+
+}
 
 interface EventSourcingRepository {
 
@@ -57,7 +104,7 @@ interface EventSourcingRepository {
 
         lateinit var eventSourcingRepository: EventSourcingRepository
 
-        fun <E : Event, A : Aggregate> apply(e: E, aggregate: A) {
+        fun apply(e: Event, aggregate: Aggregate) {
 
             // apply event on instance - if fails, its bad :D
             // find method using reflection and apply event
@@ -93,7 +140,7 @@ interface EventSourcingRepository {
 
         }
 
-        protected fun <A : Aggregate, E : Event> applyEvent( e: E, aggregate: A) {
+        fun applyEvent(e: Event, aggregate: Aggregate) {
 
             val aggregateJavaType = aggregate.javaClass
 
@@ -109,12 +156,9 @@ interface EventSourcingRepository {
 
     }
 
-    fun <A, E> persist(pEvt: PersistentEvent<A, E>)
-            where
-            A : Aggregate,
-            E : Event
+    fun <A : Aggregate, E : Event> persist(pEvt: PersistentEvent<A, E>)
 
-    fun <A> load(aggregateType: KClass<A>, id: String)
+    fun <A> load(aggregateType: KClass<A>, id: String): A?
             where A : Aggregate
 
     fun <A> getLastEventSequenceId(aggregateType: KClass<A>, id: String): Int
@@ -123,6 +167,10 @@ interface EventSourcingRepository {
 }
 
 interface Aggregate {
+
+    @Target(AnnotationTarget.CONSTRUCTOR)
+    @Retention(AnnotationRetention.RUNTIME)
+    annotation class CreateCommandHandler
 
     @Target(AnnotationTarget.FUNCTION)
     @Retention(AnnotationRetention.RUNTIME)
