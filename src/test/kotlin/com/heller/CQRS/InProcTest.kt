@@ -74,9 +74,10 @@ class AggregateTest {
     data class DummyCreateCommandFinished(val aggregateId: String, val some: String) : Event
 
     class DummyAggregate
-     : Aggregate {
+        : Aggregate {
 
-        @Aggregate.CreateCommandHandler constructor(cmd: DummyCreateCommand){
+        @Aggregate.CreateCommandHandler
+        constructor(cmd: DummyCreateCommand) {
             val evt = DummyCreateCommandFinished(
                     aggregateId = UUID.randomUUID().toString(),
                     some = cmd.some)
@@ -84,7 +85,7 @@ class AggregateTest {
             EventSourcingRepository.apply(evt, this)
         }
 
-        private constructor(){}
+        private constructor() {}
 
         @Aggregate.AggregateId
         lateinit var id: String
@@ -126,9 +127,9 @@ class AggregateTest {
 
 }
 
-class AggregateSupportServiceTest{
+class AggregateSupportServiceTest {
 
-    class DummyAggregate : Aggregate{
+    class DummyAggregate : Aggregate {
 
         var someValue: String = "before"
 
@@ -138,23 +139,38 @@ class AggregateSupportServiceTest{
         constructor()
 
         @Aggregate.CreateCommandHandler
-        constructor(cmd: DummyCreateCommand){
+        constructor(cmd: DummyCreateCommand) {
             EventSourcingRepository.apply(
-                    DummyCreatedEvent("after"), this
+                    DummyCreatedEvent(cmd.data), this
             )
         }
 
         @Aggregate.EventHandler
-        fun on(evt: DummyCreatedEvent){
+        fun on(evt: DummyCreatedEvent) {
             someValue = evt.data
 
             id = "1"
         }
 
         @Aggregate.CommandHandler
-        fun handle(cmd: DummyCommand): DummyCommand.Result{
+        fun handle(cmd: DummyCommand): DummyCommand.Result {
+
+            EventSourcingRepository.apply(
+                    DummyCommandApplied(
+                            id = this.id,
+                            newData = cmd.newData
+                    ),
+                    this
+            )
 
             return DummyCommand.Result(id)
+
+        }
+
+        @Aggregate.EventHandler
+        fun on(evt: DummyCommandApplied) {
+
+            someValue = evt.newData
 
         }
 
@@ -164,52 +180,69 @@ class AggregateSupportServiceTest{
 
     data class DummyCreatedEvent(val data: String) : Event
 
-    data class DummyCommand(@Command.AggregateId val id: String) : Command.WithResult<DummyCommand.Result>{
+    data class DummyCommand(@Command.AggregateId override val aggregateId: String, val newData: String) : Command.WithAggregateId<DummyCommand.Result> {
 
         data class Result(val id: String) : Command.Result
 
     }
 
+    data class DummyCommandApplied(val id: String, val newData: String) : Event
+
     @Test
-    fun shouldBeAbleToRegisterAggregate(){
+    fun shouldBeAbleToRegisterAggregate() {
 
         val eventSourcingReposiory = InProcEventSourcingRepository()
 
         EventSourcingRepository.eventSourcingRepository = eventSourcingReposiory
 
-        val commandBus=InProcCommandBus()
+        val commandBus = InProcCommandBus()
 
         AggregateSupportService.register(
                 commandBus = commandBus,
-
                 aggregateType = DummyAggregate::class
         )
 
-        val result = commandBus.ask(DummyCreateCommand("some data"))
+        val data1 = "some data"
+        val result = commandBus.ask(DummyCreateCommand(data1))
 
+        val loadedAggregate1 = eventSourcingReposiory.load(
+                DummyAggregate::class,
+                result.id
+        )!!
+
+
+        val data2 = "some data2"
+        val dummyCommandResult = commandBus.ask(DummyCommand(result.id, data2))
+
+        val loadedAggregate2 = eventSourcingReposiory.load(
+                DummyAggregate::class,
+                result.id
+        )!!
+
+        Assert.assertEquals(data1, loadedAggregate1.someValue)
+        Assert.assertEquals(data2, loadedAggregate2.someValue)
     }
-
 
 
 }
 
 class InProcEventSourcingRepositoryTest {
 
-    class DummyAggregate : Aggregate{
+    class DummyAggregate : Aggregate {
 
         var someValue: String = "before"
 
         constructor()
 
         @Aggregate.CreateCommandHandler
-        constructor(cmd: DummyCreateCommand){
+        constructor(cmd: DummyCreateCommand) {
             EventSourcingRepository.apply(
                     DummyCreatedEvent("after"), this
             )
         }
 
         @Aggregate.EventHandler
-        fun on(evt: DummyCreatedEvent){
+        fun on(evt: DummyCreatedEvent) {
             someValue = evt.data
         }
 
@@ -220,7 +253,7 @@ class InProcEventSourcingRepositoryTest {
     data class DummyCreatedEvent(val data: String) : Event
 
     @Test
-    fun persist_and_load_shouldWork(){
+    fun persist_and_load_shouldWork() {
 
         val testee = InProcEventSourcingRepository()
 
@@ -241,6 +274,5 @@ class InProcEventSourcingRepositoryTest {
 
         Assert.assertEquals(data, loadedAggregate.someValue)
     }
-
 
 }

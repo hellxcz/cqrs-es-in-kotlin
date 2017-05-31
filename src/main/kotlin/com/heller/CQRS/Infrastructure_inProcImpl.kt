@@ -133,6 +133,12 @@ class InProcEventSourcingRepository : EventSourcingRepository {
 
             val _events = eventsStore[identity]!!
 
+            if (_events.last().sequence == pEvt.sequence){
+
+                throw Exception("concurrent access to ${pEvt.aggregateType} ${pEvt.aggregateId}")
+
+            }
+
             eventsStore = eventsStore.minus(identity)
                     .plus(Pair(identity, _events.plus(pEvt)))
 
@@ -155,14 +161,30 @@ class InProcEventSourcingRepository : EventSourcingRepository {
 
         val aggregate = constructor.newInstance() as A
 
-        eventsStore[identity]!!.forEach { EventSourcingRepository.applyEvent(it.event, aggregate) }
+        val lastSequenceId = aggregateType.java.getDeclaredField("lastSequenceId")
+
+        eventsStore[identity]!!.forEach {
+            EventSourcingRepository.applyEvent(it.event, aggregate)
+
+            lastSequenceId.set(aggregate, it.sequence)
+        }
 
         return aggregate
 
     }
 
     override fun <A : Aggregate> getLastEventSequenceId(aggregateType: KClass<A>, id: String): Int {
-        return 3
+
+        val identity = AggregateIdentity(
+                aggregateType = aggregateType,
+                id = id
+        )
+
+        if(eventsStore.containsKey(identity)){
+
+            return eventsStore[identity]!!.size
+
+        } else return 0
     }
 
 }

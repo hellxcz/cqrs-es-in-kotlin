@@ -10,11 +10,10 @@ interface Command {
     }
 
 
-
     interface WithResult<R : Result> : Command
 
-    interface Creational<E : Event> : WithResult<Creational.Result>{
-        class Result : Command.Result // TODO - should contain newly created ID
+    interface Creational<E : Event> : WithResult<Creational.Result> {
+        data class Result(val id: String) : Command.Result // TODO - should contain newly created ID
     }
 
     interface WithAggregateId<R : Result> : WithResult<R> {
@@ -82,16 +81,43 @@ interface AggregateSupportService {
 
                         val commandType = constructor.parameterTypes.get(0).kotlin as KClass<Command.Creational<Event>>
 
+                        val aggregateId = aggregateType.java.declaredFields.find { it.getAnnotation(Aggregate.AggregateId::class.java) != null }
+
                         commandBus.subscribeCreational(commandType, {
                             cmd ->
 
-                            constructor.newInstance(cmd)
+                            val newInstance = constructor.newInstance(cmd) as A
 
-                            Command.Creational.Result()
+                            val aggregateId = aggregateId!!.get(newInstance) as String
+
+                            Command.Creational.Result(aggregateId)
 
                         })
                     }
 
+            aggregateType.java.declaredMethods
+                    .filter {
+                        it.getAnnotation(Aggregate.CommandHandler::class.java) != null
+                    }
+                    .forEach {
+
+                        val method = it
+
+                        val commandType = method.parameterTypes.get(0).kotlin as KClass<Command.WithAggregateId<Command.Result>>
+
+                        commandBus.subscribe(
+                                commandType, {
+
+                            cmd ->
+
+                            val aggregate = EventSourcingRepository.eventSourcingRepository.load(
+                                    aggregateType = aggregateType,
+                                    id = cmd.aggregateId
+                            )
+                            method.invoke(aggregate, cmd) as Command.Result
+
+                        })
+                    }
         }
 
     }
@@ -127,7 +153,7 @@ interface EventSourcingRepository {
             // - sequence, aggregateId, aggregateType
 
             // find applied sequence id on given aggregate
-            val lastEventSequenceId = eventSourcingRepository.getLastEventSequenceId(aggregateKotlinType, aggregateId)
+            val lastEventSequenceId = 1 + eventSourcingRepository.getLastEventSequenceId(aggregateKotlinType, aggregateId)
 
             val persistentEvent = PersistentEvent(
                     aggregateId = aggregateId,
@@ -166,7 +192,7 @@ interface EventSourcingRepository {
 
 }
 
-interface Aggregate {
+open class Aggregate {
 
     @Target(AnnotationTarget.CONSTRUCTOR)
     @Retention(AnnotationRetention.RUNTIME)
@@ -183,6 +209,8 @@ interface Aggregate {
     @Target(AnnotationTarget.FIELD)
     @Retention(AnnotationRetention.RUNTIME)
     annotation class AggregateId
+
+    var lastSequenceId: Int = 0
 
     interface Data {
 
